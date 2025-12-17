@@ -1,0 +1,31 @@
+name: clean-pii
+description: Remove PII and secrets from conversations
+inputs:
+  - name: conversations
+    type: string
+    description: JSON file containing parsed conversations
+  - name: config
+    type: string
+    description: Path to PII patterns config
+    default: /app/config/pii_patterns.yaml
+outputs:
+  - name: cleaned
+    type: string
+    description: JSON file containing sanitized conversations
+  - name: redaction_log
+    type: string
+    description: Log of what was redacted (counts only)
+implementation:
+  container:
+    image: distiller-pipeline:latest
+    command:
+      - python
+      - /app/scripts/clean_pii.py
+      - --input
+      - {inputPath: conversations}
+      - --config
+      - {inputValue: config}
+      - --output
+      - {outputPath: cleaned}
+      - --log
+      - {outputPath: redaction_log}

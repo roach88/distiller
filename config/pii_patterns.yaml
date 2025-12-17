@@ -1,0 +1,46 @@
+# PII and Secret Detection Patterns
+# Used by clean_pii.py to redact sensitive data
+
+patterns:
+  # Email addresses
+  email: "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}"
+
+  # API keys and tokens (common formats)
+  api_key: "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*[\"']?[\\w-]{20,}[\"']?"
+  bearer_token: "(?i)bearer\\s+[\\w-]+\\.[\\w-]+\\.[\\w-]+"
+
+  # AWS credentials
+  aws_access_key: "AKIA[0-9A-Z]{16}"
+  aws_secret_key: "(?i)aws[_-]?secret[_-]?access[_-]?key\\s*[:=]\\s*[\"']?[\\w/+=]{40}[\"']?"
+
+  # Generic secrets
+  password: "(?i)(password|passwd|pwd)\\s*[:=]\\s*[\"']?[^\\s\"']{8,}[\"']?"
+  secret: "(?i)secret\\s*[:=]\\s*[\"']?[\\w-]{16,}[\"']?"
+  token: "(?i)token\\s*[:=]\\s*[\"']?[\\w-]{20,}[\"']?"
+
+  # Private keys
+  private_key: "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+
+  # GitHub/GitLab tokens
+  github_token: "gh[pousr]_[A-Za-z0-9_]{36,}"
+  gitlab_token: "glpat-[\\w-]{20}"
+
+replacements:
+  # Path normalization
+  home_dir:
+    pattern: "/Users/\\w+"
+    replacement: "~"
+
+  # Normalize common paths
+  tmp_dir:
+    pattern: "/var/folders/[\\w/]+"
+    replacement: "/tmp"
+
+redaction:
+  # What to replace detected PII with
+  email: "[EMAIL]"
+  api_key: "[API_KEY]"
+  password: "[PASSWORD]"
+  token: "[TOKEN]"
+  private_key: "[PRIVATE_KEY]"
+  default: "[REDACTED]"

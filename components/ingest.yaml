@@ -1,0 +1,25 @@
+name: ingest-sessions
+description: Load sessions from SQLite database and output as JSON
+inputs:
+  - name: db_path
+    type: string
+    description: Path to SQLite database inside container (default /data/raw_logs.db)
+    default: /data/raw_logs.db
+  - name: project_filter
+    type: string
+    description: Optional project name filter
+    optional: true
+outputs:
+  - name: sessions
+    type: string
+    description: JSON file containing session data
+implementation:
+  container:
+    image: distiller-pipeline:latest
+    command:
+      - python
+      - /app/scripts/ingest.py
+      - --db
+      - {inputValue: db_path}
+      - --output
+      - {outputPath: sessions}

@@ -1,0 +1,20 @@
+name: parse-conversations
+description: Parse raw sessions into structured conversation turns
+inputs:
+  - name: sessions
+    type: string
+    description: JSON file containing session data
+outputs:
+  - name: conversations
+    type: string
+    description: JSON file containing parsed conversations with turns and tool calls
+implementation:
+  container:
+    image: distiller-pipeline:latest
+    command:
+      - python
+      - /app/scripts/parse.py
+      - --input
+      - {inputPath: sessions}
+      - --output
+      - {outputPath: conversations}

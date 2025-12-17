@@ -1,0 +1,10 @@
+# Flow-Judge Modelfile for Ollama
+# Based on flowaicom/Flow-Judge-v0.1-GGUF
+#
+# This model is used for LLM-as-judge quality scoring of training data.
+# It evaluates conversation quality across multiple dimensions.
+
+FROM flow-judge.gguf
+TEMPLATE {{ .Prompt }}
+PARAMETER temperature 0.1
+PARAMETER stop <|endoftext|>
