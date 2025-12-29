@@ -7,12 +7,12 @@ Every time you use Claude Code, you generate valuable training signal—task com
 ## What You Get
 
 ```
-85 sessions → Pipeline → 528 training examples
+Your sessions → Pipeline → Quality-tiered training data
 
 output/
-├── training_high_quality.jsonl   # 258 examples (score ≥ 0.8)
-├── training_good_quality.jsonl   # 191 examples (score 0.7-0.8)
-└── training_diverse.jsonl        #  79 examples (score 0.6-0.7)
+├── training_high_quality.jsonl   # score ≥ 0.8 (production fine-tuning)
+├── training_good_quality.jsonl   # score 0.7-0.8 (augmentation)
+└── training_diverse.jsonl        # score 0.6-0.7 (edge cases)
 ```
 
 Each example includes rich metadata for filtering and analysis:
@@ -259,7 +259,7 @@ provider: "openrouter"
 # Model selection
 # OpenRouter: "anthropic/claude-3.5-sonnet", "openai/gpt-4o", etc.
 # Ollama: "llama3", "mistral", etc.
-model: "x-ai/grok-code-fast-1"
+model: "anthropic/claude-3-haiku"
 
 # Scoring parameters
 scoring:
