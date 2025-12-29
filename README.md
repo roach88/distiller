@@ -60,8 +60,8 @@ Scores are normalized to 0-1 and combined. By default, conversations below 0.6 a
 # Clone and install
 git clone https://github.com/roach88/distiller.git
 cd distiller
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
+uv venv && source .venv/bin/activate
+uv pip install -e .
 
 # Set up LLM scoring (optional but recommended)
 echo "OPENROUTER_API_KEY=your-key-here" > .env
@@ -80,6 +80,7 @@ Your training data will be in `output/`.
 ### Requirements
 
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - macOS or Linux
 - OpenRouter API key (optional, for LLM scoring — free tier at [openrouter.ai/keys](https://openrouter.ai/keys))
 
@@ -92,23 +93,17 @@ Your training data will be in `output/`.
    cd distiller
    ```
 
-2. **Create virtual environment**
+2. **Create virtual environment and install**
 
    ```bash
-   python -m venv .venv
-   source .venv/bin/activate
-   ```
-
-3. **Install**
-
-   ```bash
-   pip install -e .
+   uv venv && source .venv/bin/activate
+   uv pip install -e .
 
    # Optional: S3 support
-   pip install -e ".[s3]"
+   uv pip install -e ".[s3]"
    ```
 
-4. **Configure LLM scoring** (optional)
+3. **Configure LLM scoring** (optional)
 
    ```bash
    echo "OPENROUTER_API_KEY=sk-or-v1-your-key" > .env
@@ -116,7 +111,7 @@ Your training data will be in `output/`.
 
    Without this, Distiller uses heuristic scoring only (still works, just less accurate).
 
-5. **Initialize**
+4. **Initialize**
 
    ```bash
    distiller init
@@ -124,7 +119,7 @@ Your training data will be in `output/`.
 
    This creates the database, imports existing sessions, and sets up a weekly cron job.
 
-6. **Add to PATH** (for global access)
+5. **Add to PATH** (for global access)
 
    The `distiller` command is available when the venv is active. To use it from anywhere without activating:
 
@@ -262,7 +257,7 @@ model: "llama3"
 ### S3 Upload
 
 ```bash
-pip install -e ".[s3]"
+uv pip install -e ".[s3]"
 aws configure
 distiller run --s3-bucket my-bucket
 ```
@@ -303,7 +298,7 @@ distiller init
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 pytest
 
 # Regenerate BAML client after editing baml_src/
