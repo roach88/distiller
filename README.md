@@ -26,7 +26,7 @@ You get:
 
 ## How It Works
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
 │   Claude Code        Distiller Pipeline              Output     │
@@ -171,7 +171,7 @@ distiller cron --remove
 
 Training data is saved as ChatML-format JSONL:
 
-```
+```text
 output/
 ├── training_high_quality.jsonl   # score ≥ 0.8
 ├── training_good_quality.jsonl   # score 0.7-0.8
@@ -295,7 +295,7 @@ baml-cli generate
 
 ### Architecture
 
-```
+```text
 distiller/
 ├── cli.py              # CLI entry point
 ├── llm_providers.py    # OpenRouter/Ollama abstraction
