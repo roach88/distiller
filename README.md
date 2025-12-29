@@ -121,20 +121,15 @@ Your training data will be in `output/`.
 
 5. **Add to PATH** (for global access)
 
-   The `distiller` command is available when the venv is active. To use it from anywhere without activating:
+   The `distiller` command is available when the venv is active. To use it from anywhere without activating, run this from inside the repo:
 
    ```bash
-   # Add to your shell config (~/.zshrc or ~/.bashrc)
-   export PATH="$PATH:/path/to/distiller/.venv/bin"
+   # Add to your shell config (run from inside the distiller directory)
+   echo "export PATH=\"\$PATH:$PWD/.venv/bin\"" >> ~/.zshrc
+   source ~/.zshrc
    ```
 
-   Or create an alias:
-
-   ```bash
-   alias distiller="/path/to/distiller/.venv/bin/distiller"
-   ```
-
-   Replace `/path/to/distiller` with your actual install location.
+   For bash, use `~/.bashrc` instead of `~/.zshrc`.
 
 ## Usage
 
