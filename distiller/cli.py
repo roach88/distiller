@@ -103,11 +103,7 @@ def setup_weekly_cron(hour: int = 3, day: int = 1) -> bool:
     return result.returncode == 0
 
 
-# Ollama/Flow-Judge setup
-FLOW_JUDGE_MODEL = "flow-judge:latest"
-FLOW_JUDGE_GGUF_URL = "https://huggingface.co/flowaicom/Flow-Judge-v0.1-GGUF/resolve/main/Flow-Judge-v0.1-Q8_0.gguf"
-FLOW_JUDGE_GGUF_NAME = "Flow-Judge-v0.1-Q8_0.gguf"
-
+# Ollama setup (for local LLM scoring)
 
 def check_ollama_installed() -> bool:
     """Check if Ollama is installed."""
@@ -202,77 +198,20 @@ def start_ollama() -> bool:
     return False
 
 
-def setup_flow_judge_model() -> bool:
-    """Download and create Flow-Judge model. Returns True on success."""
-    root = get_distiller_root()
-    models_dir = root / "models"
-    models_dir.mkdir(exist_ok=True)
-
-    gguf_path = models_dir / FLOW_JUDGE_GGUF_NAME
-    modelfile_path = root / "config" / "flow-judge.modelfile"
-
-    # Download GGUF if not present
-    if not gguf_path.exists():
-        console.print(f"   [dim]Downloading Flow-Judge model (~2.4GB)...[/dim]")
-
-        try:
-            # Try huggingface-cli first (faster, supports resume)
-            result = subprocess.run(
-                ["huggingface-cli", "download", "flowaicom/Flow-Judge-v0.1-GGUF",
-                 FLOW_JUDGE_GGUF_NAME, "--local-dir", str(models_dir)],
-                capture_output=True,
-                text=True
-            )
-            if result.returncode != 0:
-                # Fall back to curl
-                result = subprocess.run(
-                    ["curl", "-L", "-o", str(gguf_path), FLOW_JUDGE_GGUF_URL],
-                    capture_output=False  # Show progress
-                )
-                if result.returncode != 0:
-                    return False
-        except FileNotFoundError:
-            # huggingface-cli not found, use curl
-            result = subprocess.run(
-                ["curl", "-L", "-o", str(gguf_path), FLOW_JUDGE_GGUF_URL],
-                capture_output=False
-            )
-            if result.returncode != 0:
-                return False
-
-    # Create Ollama model from GGUF
-    console.print(f"   [dim]Creating Ollama model...[/dim]")
-
-    # Write modelfile pointing to downloaded GGUF
-    temp_modelfile = models_dir / "Modelfile"
-    temp_modelfile.write_text(f"""FROM {gguf_path}
-TEMPLATE {{{{ .Prompt }}}}
-PARAMETER temperature 0.1
-PARAMETER stop <|endoftext|>
-""")
-
-    result = subprocess.run(
-        ["ollama", "create", "flow-judge", "-f", str(temp_modelfile)],
-        capture_output=True,
-        text=True
-    )
-
-    # Clean up temp modelfile
-    temp_modelfile.unlink(missing_ok=True)
-
-    return result.returncode == 0
 
 
 def ensure_ollama_ready(quiet: bool = False) -> bool:
-    """Ensure Ollama is running and Flow-Judge model is available.
+    """Ensure Ollama is installed and running (for local LLM scoring).
 
     Returns True if ready, False if setup failed.
+    Note: Does not check for specific models - those are configured in config/scoring.yaml
     """
     # Check if Ollama is installed
     if not check_ollama_installed():
         if not quiet:
-            console.print("[yellow]![/yellow] Ollama not installed. Run [cyan]distiller init[/cyan] first.")
-            console.print("    Or use [cyan]--no-llm-judge[/cyan] for heuristic-only scoring.")
+            console.print("[yellow]![/yellow] Ollama not installed.")
+            console.print("    Install from: https://ollama.com")
+            console.print("    Or configure OpenRouter in config/scoring.yaml for cloud-based scoring.")
         return False
 
     # Start Ollama if not running
@@ -285,14 +224,6 @@ def ensure_ollama_ready(quiet: bool = False) -> bool:
             return False
         if not quiet:
             console.print("[green]✓[/green] Ollama server started")
-
-    # Check if Flow-Judge model exists
-    models = get_ollama_models()
-    if FLOW_JUDGE_MODEL not in models and "flow-judge" not in [m.split(":")[0] for m in models]:
-        if not quiet:
-            console.print("[yellow]![/yellow] Flow-Judge model not found. Run [cyan]distiller setup-model[/cyan]")
-            console.print("    Or use [cyan]--no-llm-judge[/cyan] for heuristic-only scoring.")
-        return False
 
     return True
 
@@ -369,20 +300,22 @@ def cli(ctx):
 @click.option("--hour", type=int, default=3, help="Hour for weekly cron (0-23, default: 3am)")
 @click.option("--day", type=int, default=1, help="Day for weekly cron (1=Mon, 7=Sun, default: Monday)")
 @click.option("--skip-cron", is_flag=True, help="Skip automatic cron setup")
-@click.option("--skip-ollama", is_flag=True, help="Skip Ollama/Flow-Judge setup")
+@click.option("--skip-ollama", is_flag=True, help="Skip Ollama setup (for local LLM scoring)")
 def init(hour: int, day: int, skip_cron: bool, skip_ollama: bool):
     """First-time setup.
 
-    Sets up the database, Ollama with Flow-Judge model for quality scoring,
-    and creates a weekly cron job to automatically extract training data.
+    Sets up the database and creates a weekly cron job to automatically
+    extract training data from your Claude Code sessions.
 
     \b
     What this does:
       1. Creates/verifies the database
       2. Imports any existing Claude Code sessions
-      3. Installs Ollama (if needed)
-      4. Downloads Flow-Judge model for quality scoring
-      5. Sets up weekly cron (Mondays at 3am by default)
+      3. Optionally installs Ollama (for local LLM quality scoring)
+      4. Sets up weekly cron (Mondays at 3am by default)
+
+    LLM quality scoring is configured in config/scoring.yaml.
+    You can use OpenRouter (cloud) or Ollama (local) - see the config file.
 
     After setup, distiller runs automatically. Use 'distiller run' for
     manual runs or 'distiller reprocess' to redo everything.
@@ -486,26 +419,15 @@ def init(hour: int, day: int, skip_cron: bool, skip_ollama: bool):
                 console.print(f"       Or visit: [cyan]https://ollama.com[/cyan]")
     console.print()
 
-    # Step 4: Flow-Judge model
-    console.print("[bold]4. Flow-Judge Model[/bold]")
-
-    if skip_ollama:
-        console.print(f"   [dim]-[/dim] Skipped (Ollama not set up)")
-    elif not ollama_ready:
-        console.print(f"   [yellow]![/yellow] Skipped (Ollama not running)")
-        console.print(f"       Run later: [cyan]distiller setup-model[/cyan]")
+    # Step 4: LLM Scoring Configuration
+    console.print("[bold]4. LLM Scoring (Optional)[/bold]")
+    config_path = root / "config" / "scoring.yaml"
+    if config_path.exists():
+        console.print(f"   [green]✓[/green] Config found: {config_path}")
+        console.print(f"   [dim]   Edit to configure OpenRouter or Ollama for LLM scoring[/dim]")
     else:
-        # Check if model exists
-        models = get_ollama_models()
-        if FLOW_JUDGE_MODEL in models or "flow-judge" in [m.split(":")[0] for m in models]:
-            console.print(f"   [green]✓[/green] Flow-Judge model ready")
-        else:
-            console.print(f"   [dim]   Setting up Flow-Judge model...[/dim]")
-            if setup_flow_judge_model():
-                console.print(f"   [green]✓[/green] Flow-Judge model installed")
-            else:
-                console.print(f"   [yellow]![/yellow] Could not set up Flow-Judge")
-                console.print(f"       Run later: [cyan]distiller setup-model[/cyan]")
+        console.print(f"   [yellow]![/yellow] Config not found: {config_path}")
+        console.print(f"   [dim]   LLM scoring disabled (heuristic-only)[/dim]")
     console.print()
 
     # Step 5: Set up cron
@@ -639,8 +561,7 @@ def run(no_llm_judge: bool, project: Optional[str], min_score: float,
     Imports any new Claude Code sessions and extracts training data.
     Only processes sessions that haven't been extracted yet.
 
-    By default, uses Flow-Judge LLM for quality scoring. Ollama will be
-    started automatically if needed.
+    LLM scoring is configured in config/scoring.yaml (OpenRouter or Ollama).
 
     \b
     This is what the weekly cron runs. Use 'distiller reprocess'
@@ -684,9 +605,9 @@ def reprocess(no_llm_judge: bool, project: Optional[str], min_score: float,
     """Full re-extraction of all sessions.
 
     Reprocesses everything from scratch. Use this when you've changed
-    settings that affect extraction (like the judge LLM or quality thresholds).
+    settings that affect extraction (like the LLM provider or quality thresholds).
 
-    By default, uses Flow-Judge LLM for quality scoring.
+    LLM scoring is configured in config/scoring.yaml (OpenRouter or Ollama).
 
     \b
     Examples:
@@ -752,59 +673,6 @@ def paths():
         table.add_row(name, str(path), status)
 
     console.print(table)
-
-
-@cli.command("setup-model")
-def setup_model():
-    """Install or reinstall the Flow-Judge model for LLM quality scoring.
-
-    Downloads the Flow-Judge GGUF from HuggingFace and creates an Ollama model.
-    Use this if the model wasn't set up during init or needs to be reinstalled.
-    """
-    console.print()
-    console.print(Panel.fit("[bold]Flow-Judge Model Setup[/bold]", border_style="blue"))
-    console.print()
-
-    # Check Ollama
-    if not check_ollama_installed():
-        console.print("[red]Error:[/red] Ollama is not installed.")
-        console.print("Install with: [cyan]brew install ollama[/cyan]")
-        console.print("Or visit: [cyan]https://ollama.com[/cyan]")
-        return
-
-    if not check_ollama_running():
-        console.print("[dim]Starting Ollama server...[/dim]")
-        if not start_ollama():
-            console.print("[red]Error:[/red] Could not start Ollama server.")
-            console.print("Start manually with: [cyan]ollama serve[/cyan]")
-            return
-        console.print("[green]✓[/green] Ollama server started")
-
-    # Check if model already exists
-    models = get_ollama_models()
-    if FLOW_JUDGE_MODEL in models or "flow-judge" in [m.split(":")[0] for m in models]:
-        console.print("[yellow]Flow-Judge model already exists.[/yellow]")
-        if not click.confirm("Reinstall it?", default=False):
-            return
-
-    # Setup model
-    console.print("[dim]Downloading and setting up Flow-Judge model (~2.4GB)...[/dim]")
-    console.print()
-
-    if setup_flow_judge_model():
-        console.print()
-        console.print("[green]✓[/green] Flow-Judge model installed successfully!")
-        console.print()
-        console.print("LLM scoring is now enabled by default with [cyan]distiller run[/cyan]")
-    else:
-        console.print()
-        console.print("[red]✗[/red] Failed to set up Flow-Judge model.")
-        console.print()
-        console.print("Try manually:")
-        console.print("  1. Download GGUF from HuggingFace:")
-        console.print(f"     [cyan]{FLOW_JUDGE_GGUF_URL}[/cyan]")
-        console.print("  2. Create Ollama model:")
-        console.print("     [cyan]ollama create flow-judge -f Modelfile[/cyan]")
 
 
 @cli.command()

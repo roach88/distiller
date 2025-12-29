@@ -21,6 +21,7 @@ Usage:
 """
 
 import argparse
+import asyncio
 import json
 import re
 import sys
@@ -28,6 +29,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 import requests
+
+# Import LLM providers
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from distiller.llm_providers import create_llm_provider, LLMProvider, load_scoring_config
+
+# Import BAML client for structured LLM outputs
+try:
+    from baml_client import b as baml_client
+    BAML_AVAILABLE = True
+except ImportError:
+    BAML_AVAILABLE = False
+    baml_client = None
 
 
 @dataclass
@@ -337,38 +350,12 @@ def format_conversation_for_judge(conversation: dict, max_length: int = 4000) ->
     return result
 
 
-def call_ollama(prompt: str, model: str = "flow-judge:latest", timeout: int = 120) -> Optional[str]:
-    """Call Ollama API for LLM judge evaluation."""
-    try:
-        # Use chat API with system message for better JSON compliance
-        response = requests.post(
-            "http://localhost:11434/api/chat",
-            json={
-                "model": model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You are a JSON-only response bot. You MUST respond with valid JSON only, no explanations or markdown."
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                "stream": False,
-                "format": "json",  # Request JSON format
-                "options": {
-                    "temperature": 0.1,
-                    "num_predict": 256,
-                }
-            },
-            timeout=timeout
-        )
-        response.raise_for_status()
-        return response.json().get('message', {}).get('content', '')
-    except requests.exceptions.RequestException as e:
-        print(f"Ollama API error: {e}", file=sys.stderr)
+def call_llm_provider(prompt: str, provider: Optional[LLMProvider], timeout: int = 120) -> Optional[str]:
+    """Call LLM provider for evaluation."""
+    if provider is None:
         return None
+
+    return provider.score_conversation(prompt, timeout=timeout)
 
 
 def parse_judge_response(response: str) -> Optional[dict]:
@@ -390,13 +377,47 @@ def parse_judge_response(response: str) -> Optional[dict]:
 
 def score_with_llm_judge(
     conversation: dict,
-    model: str = "flow-judge:latest"
+    provider: Optional[LLMProvider]
 ) -> Optional[dict]:
-    """Score a conversation using LLM-as-judge."""
-    formatted = format_conversation_for_judge(conversation)
-    prompt = JUDGE_PROMPT.format(conversation=formatted)
+    """Score a conversation using LLM-as-judge with BAML for structured outputs."""
+    if provider is None:
+        return None
 
-    response = call_ollama(prompt, model=model)
+    formatted = format_conversation_for_judge(conversation)
+
+    # Use BAML if available for guaranteed structured output
+    if BAML_AVAILABLE and baml_client:
+        try:
+            # Call BAML function - returns typed ConversationScore object
+            # BAML client is async, so we need to run it in the event loop
+            score = asyncio.run(baml_client.JudgeConversation(conversation=formatted))
+
+            # Normalize scores to 0-1 range
+            normalized = {
+                'task_completion': max(1, min(5, score.task_completion)) / 5.0,
+                'tool_use': max(1, min(5, score.tool_use)) / 5.0,
+                'response_quality': max(1, min(5, score.response_quality)) / 5.0,
+                'code_quality': max(1, min(5, score.code_quality)) / 5.0,
+                'reasoning': score.reasoning,
+            }
+
+            # Calculate overall
+            normalized['overall'] = (
+                normalized['task_completion'] +
+                normalized['tool_use'] +
+                normalized['response_quality'] +
+                normalized['code_quality']
+            ) / 4.0
+
+            return normalized
+
+        except Exception as e:
+            # BAML failed, fall back to manual parsing
+            print(f"BAML scoring failed: {e}, falling back to manual parsing", file=sys.stderr)
+
+    # Fallback: manual prompt + JSON parsing (legacy method)
+    prompt = JUDGE_PROMPT.format(conversation=formatted)
+    response = call_llm_provider(prompt, provider=provider)
     if not response:
         return None
 
@@ -428,8 +449,7 @@ def score_with_llm_judge(
 def score_conversations(
     input_path: Path,
     output_path: Path,
-    use_llm_judge: bool = False,
-    model: str = "qwen2.5:14b",
+    provider: Optional[LLMProvider] = None,
     min_score: Optional[float] = None,
     verbose: bool = False,
 ) -> dict:
@@ -439,8 +459,7 @@ def score_conversations(
     Args:
         input_path: Path to cleaned conversations JSON
         output_path: Path to write scored conversations
-        use_llm_judge: Whether to use LLM-as-judge (slower)
-        model: Ollama model for LLM judge
+        provider: LLM provider for scoring (None = heuristic only)
         min_score: Minimum score threshold for filtering
         verbose: Print progress
 
@@ -471,8 +490,8 @@ def score_conversations(
 
         # Optionally compute LLM judge scores
         llm_scores = None
-        if use_llm_judge:
-            llm_scores = score_with_llm_judge(conv, model=model)
+        if provider:
+            llm_scores = score_with_llm_judge(conv, provider=provider)
             if llm_scores is None:
                 stats['llm_judge_failures'] += 1
 
@@ -546,13 +565,12 @@ def main():
     parser.add_argument(
         "--llm-judge",
         action="store_true",
-        help="Use LLM-as-judge scoring (requires Ollama)",
+        help="Use LLM-as-judge scoring (configured in config/scoring.yaml)",
     )
     parser.add_argument(
-        "--model",
-        type=str,
-        default="flow-judge:latest",
-        help="Ollama model for LLM judge (default: flow-judge:latest)",
+        "--no-llm-judge",
+        action="store_true",
+        help="Skip LLM scoring, use heuristics only",
     )
     parser.add_argument(
         "--min-score",
@@ -577,12 +595,41 @@ def main():
         print(f"Error: Input file not found: {args.input}", file=sys.stderr)
         return 1
 
+    # Load LLM provider from config
+    provider = None
+    if args.llm_judge and not args.no_llm_judge:
+        try:
+            # Load config first - this is the source of truth
+            config = load_scoring_config()
+
+            # Set environment variables from config for BAML to use
+            # This ensures BAML and the fallback provider use the same settings
+            import os
+            os.environ['OPENROUTER_MODEL'] = config.get('model', 'x-ai/grok-code-fast-1')
+            openrouter_config = config.get('openrouter', {})
+            os.environ['OPENROUTER_BASE_URL'] = openrouter_config.get('base_url', 'https://openrouter.ai/api/v1')
+            os.environ['OPENROUTER_SITE_URL'] = openrouter_config.get('site_url', 'https://github.com/roach88/distiller')
+            os.environ['OPENROUTER_APP_NAME'] = openrouter_config.get('app_name', 'distiller')
+
+            # Create provider (for fallback path)
+            provider = create_llm_provider()
+
+            if args.verbose:
+                print(f"Using LLM provider: {config.get('provider')} with model {config.get('model')}")
+                if BAML_AVAILABLE:
+                    print("  ✓ BAML enabled for structured outputs (guaranteed JSON parsing)")
+                    print(f"  ✓ Config loaded from config/scoring.yaml")
+                else:
+                    print("  ⚠ BAML not available, using fallback JSON parsing")
+        except Exception as e:
+            print(f"Warning: Could not load LLM provider: {e}", file=sys.stderr)
+            print("Falling back to heuristic-only scoring", file=sys.stderr)
+
     try:
         stats = score_conversations(
             args.input,
             args.output,
-            use_llm_judge=args.llm_judge,
-            model=args.model,
+            provider=provider,
             min_score=args.min_score,
             verbose=args.verbose,
         )

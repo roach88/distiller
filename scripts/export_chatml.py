@@ -183,13 +183,29 @@ def convert_conversation(
     if "user" not in roles or "assistant" not in roles:
         return None
 
+    # Calculate metadata
+    has_tool_calls = any(turn.get("tool_calls") for turn in turns)
+    tool_call_count = sum(len(turn.get("tool_calls", [])) for turn in turns)
+
+    # Build metadata with quality scores and computed fields
+    metadata = {
+        "conversation_id": conversation.get("id"),
+        "project": conversation.get("project"),
+        "source": "claude-code",
+        "turn_count": len(turns),
+        "message_count": len(messages),
+        "has_tool_calls": has_tool_calls,
+        "tool_call_count": tool_call_count,
+    }
+
+    # Include quality scores if available
+    quality_scores = conversation.get("quality_scores")
+    if quality_scores:
+        metadata["quality_scores"] = quality_scores
+
     return {
         "messages": messages,
-        "metadata": {
-            "conversation_id": conversation.get("id"),
-            "project": conversation.get("project"),
-            "source": "claude-code",
-        }
+        "metadata": metadata,
     }
 
 
@@ -202,6 +218,8 @@ def export_to_chatml(
     max_turns: Optional[int] = None,
     split_long_conversations: bool = True,
     max_messages_per_example: int = 50,
+    min_quality_score: Optional[float] = None,
+    max_quality_score: Optional[float] = None,
 ) -> dict:
     """
     Export conversations to ChatML JSONL format.
@@ -215,6 +233,8 @@ def export_to_chatml(
         max_turns: Maximum turns per conversation (None = unlimited)
         split_long_conversations: Split long conversations into chunks
         max_messages_per_example: Max messages per training example
+        min_quality_score: Minimum quality score (filter out below this)
+        max_quality_score: Maximum quality score (filter out above this)
 
     Returns:
         Stats dict with counts
@@ -224,10 +244,33 @@ def export_to_chatml(
 
     conversations = data.get("conversations", [])
 
+    # Filter by quality score if specified
+    filtered_conversations = []
+    for conv in conversations:
+        quality_scores = conv.get("quality_scores", {})
+        overall_score = quality_scores.get("overall")
+
+        # Skip if no quality score and filtering is requested
+        if (min_quality_score is not None or max_quality_score is not None) and overall_score is None:
+            continue
+
+        # Apply min filter
+        if min_quality_score is not None and overall_score < min_quality_score:
+            continue
+
+        # Apply max filter
+        if max_quality_score is not None and overall_score > max_quality_score:
+            continue
+
+        filtered_conversations.append(conv)
+
+    conversations = filtered_conversations
+
     stats = {
         "conversations_input": len(conversations),
         "examples_output": 0,
         "skipped_too_short": 0,
+        "skipped_quality_filter": len(data.get("conversations", [])) - len(conversations),
         "total_messages": 0,
         "total_tool_calls": 0,
     }
@@ -292,6 +335,104 @@ def export_to_chatml(
                     )
 
     return stats
+
+
+def export_tiered_datasets(
+    input_path: Path,
+    output_dir: Path,
+    output_prefix: str = "training",
+    system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+    include_thinking: bool = False,
+    min_turns: int = 2,
+    max_turns: Optional[int] = None,
+    split_long_conversations: bool = True,
+    max_messages_per_example: int = 50,
+    high_quality_threshold: float = 0.8,
+    good_quality_threshold: float = 0.7,
+    diverse_quality_threshold: float = 0.6,
+) -> dict:
+    """
+    Export conversations to multiple quality-tiered datasets.
+
+    Creates three datasets by default:
+    - high_quality.jsonl: >= 0.8 overall score
+    - good_quality.jsonl: >= 0.7 and < 0.8
+    - diverse.jsonl: >= 0.6 and < 0.7
+
+    Args:
+        input_path: Path to scored conversations JSON
+        output_dir: Directory to write tiered JSONL files
+        output_prefix: Prefix for output filenames (default: "training")
+        system_prompt: System prompt to prepend
+        include_thinking: Whether to include <think> tags
+        min_turns: Minimum turns per conversation
+        max_turns: Maximum turns per conversation
+        split_long_conversations: Split long conversations into chunks
+        max_messages_per_example: Max messages per training example
+        high_quality_threshold: Minimum score for high_quality tier (default: 0.8)
+        good_quality_threshold: Minimum score for good_quality tier (default: 0.7)
+        diverse_quality_threshold: Minimum score for diverse tier (default: 0.6)
+
+    Returns:
+        Combined stats dict with tier breakdowns
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Define tiers
+    tiers = [
+        {
+            "name": "high_quality",
+            "min_score": high_quality_threshold,
+            "max_score": None,
+            "output_path": output_dir / f"{output_prefix}_high_quality.jsonl",
+        },
+        {
+            "name": "good_quality",
+            "min_score": good_quality_threshold,
+            "max_score": high_quality_threshold,
+            "output_path": output_dir / f"{output_prefix}_good_quality.jsonl",
+        },
+        {
+            "name": "diverse",
+            "min_score": diverse_quality_threshold,
+            "max_score": good_quality_threshold,
+            "output_path": output_dir / f"{output_prefix}_diverse.jsonl",
+        },
+    ]
+
+    combined_stats = {
+        "tiers": {},
+        "total_conversations": 0,
+        "total_examples": 0,
+    }
+
+    # Export each tier
+    for tier in tiers:
+        tier_stats = export_to_chatml(
+            input_path=input_path,
+            output_path=tier["output_path"],
+            system_prompt=system_prompt,
+            include_thinking=include_thinking,
+            min_turns=min_turns,
+            max_turns=max_turns,
+            split_long_conversations=split_long_conversations,
+            max_messages_per_example=max_messages_per_example,
+            min_quality_score=tier["min_score"],
+            max_quality_score=tier["max_score"],
+        )
+
+        combined_stats["tiers"][tier["name"]] = {
+            "output_file": str(tier["output_path"]),
+            "min_score": tier["min_score"],
+            "max_score": tier["max_score"],
+            **tier_stats,
+        }
+
+        combined_stats["total_conversations"] += tier_stats["conversations_input"]
+        combined_stats["total_examples"] += tier_stats["examples_output"]
+
+    return combined_stats
 
 
 def main():

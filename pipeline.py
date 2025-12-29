@@ -27,8 +27,9 @@ from scripts.ingest import export_sessions_from_db, get_db_path, ingest_backfill
 from scripts.parse import parse_sessions
 from scripts.clean_pii import clean_conversations
 from scripts.score_quality import score_conversations
-from scripts.export_chatml import export_to_chatml
+from scripts.export_chatml import export_to_chatml, export_tiered_datasets
 from scripts.storage import get_storage, get_machine_id, StorageAdapter
+from distiller.llm_providers import create_llm_provider, load_scoring_config
 
 
 STATE_FILE = ".distiller_state.json"
@@ -50,11 +51,14 @@ def run_pipeline(
     output_dir: str = "output",
     project_filter: Optional[str] = None,
     llm_judge: bool = False,
-    llm_model: str = "flow-judge:latest",
     min_score: float = 0.6,
     incremental: bool = False,
     storage: Optional[StorageAdapter] = None,
     output_prefix: Optional[str] = None,
+    tiered_export: bool = True,
+    high_quality_threshold: float = 0.8,
+    good_quality_threshold: float = 0.7,
+    diverse_quality_threshold: float = 0.6,
 ) -> dict:
     """
     Full pipeline: ingest -> parse -> clean_pii -> score -> export
@@ -62,12 +66,15 @@ def run_pipeline(
     Args:
         output_dir: Output directory for intermediate files
         project_filter: Filter to specific project name
-        llm_judge: Use LLM-as-judge scoring (slower, better)
-        llm_model: Ollama model for LLM judge
+        llm_judge: Use LLM-as-judge scoring (configured in config/scoring.yaml)
         min_score: Minimum quality score threshold (0.0-1.0)
         incremental: Only process sessions since last run
         storage: Storage adapter for output (local or S3)
         output_prefix: Prefix for output filename (default: machine ID)
+        tiered_export: Create quality-tiered datasets (default: True)
+        high_quality_threshold: Minimum score for high_quality tier (default: 0.8)
+        good_quality_threshold: Minimum score for good_quality tier (default: 0.7)
+        diverse_quality_threshold: Minimum score for diverse tier (default: 0.6)
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -137,13 +144,32 @@ def run_pipeline(
         print(f"  -> {clean_stats['system_noise_stripped']} system noise tags stripped")
 
     # Stage 4: Score Quality
-    score_method = "heuristic + LLM judge" if llm_judge else "heuristic"
+    # Load LLM provider from config if using LLM judge
+    provider = None
+    if llm_judge:
+        try:
+            # Load config and set env vars for BAML
+            config = load_scoring_config()
+            os.environ['OPENROUTER_MODEL'] = config.get('model', 'x-ai/grok-code-fast-1')
+            openrouter_config = config.get('openrouter', {})
+            os.environ['OPENROUTER_BASE_URL'] = openrouter_config.get('base_url', 'https://openrouter.ai/api/v1')
+            os.environ['OPENROUTER_SITE_URL'] = openrouter_config.get('site_url', 'https://github.com/roach88/distiller')
+            os.environ['OPENROUTER_APP_NAME'] = openrouter_config.get('app_name', 'distiller')
+
+            provider = create_llm_provider()
+            score_method = f"heuristic + LLM judge ({config.get('provider')})"
+        except Exception as e:
+            print(f"  Warning: Could not load LLM provider: {e}")
+            print(f"  Falling back to heuristic-only scoring")
+            score_method = "heuristic (LLM provider failed)"
+    else:
+        score_method = "heuristic"
+
     print(f"Stage 4: Scoring quality ({score_method})...")
     score_stats = score_conversations(
         cleaned_path,
         scored_path,
-        use_llm_judge=llm_judge,
-        model=llm_model,
+        provider=provider,
         min_score=min_score,
         verbose=True,
     )
@@ -153,18 +179,51 @@ def run_pipeline(
 
     # Stage 5: Export to ChatML
     print("Stage 5: Exporting to ChatML...")
-    export_stats = export_to_chatml(scored_path, chatml_path)
-    print(f"  -> {export_stats['examples_output']} training examples, {export_stats['total_messages']} messages")
+    if tiered_export:
+        # Create quality-tiered datasets
+        export_stats = export_tiered_datasets(
+            input_path=scored_path,
+            output_dir=output_path,
+            output_prefix=output_prefix,
+            high_quality_threshold=high_quality_threshold,
+            good_quality_threshold=good_quality_threshold,
+            diverse_quality_threshold=diverse_quality_threshold,
+        )
+        print(f"  -> Created tiered datasets:")
+        for tier_name, tier_stats in export_stats["tiers"].items():
+            print(f"     - {tier_name}: {tier_stats['examples_output']} examples ({tier_stats['output_file']})")
+    else:
+        # Single output file
+        export_stats = export_to_chatml(scored_path, chatml_path)
+        print(f"  -> {export_stats['examples_output']} training examples, {export_stats['total_messages']} messages")
 
     # Stage 6: Upload to storage (if S3 configured)
-    final_location = str(chatml_path)
-    if storage:
-        print("Stage 6: Uploading to storage...")
-        data = chatml_path.read_bytes()
-        final_location = storage.save(output_filename, data)
-        print(f"  -> Uploaded to: {final_location}")
-        # Remove local file after upload
-        chatml_path.unlink()
+    if tiered_export:
+        final_location = {}
+        if storage:
+            print("Stage 6: Uploading to storage...")
+            for tier_name, tier_stats in export_stats["tiers"].items():
+                tier_file = Path(tier_stats["output_file"])
+                if tier_file.exists():
+                    data = tier_file.read_bytes()
+                    s3_location = storage.save(tier_file.name, data)
+                    final_location[tier_name] = s3_location
+                    print(f"  -> Uploaded {tier_name}: {s3_location}")
+                    # Remove local file after upload
+                    tier_file.unlink()
+        else:
+            # Local storage - collect file paths
+            for tier_name, tier_stats in export_stats["tiers"].items():
+                final_location[tier_name] = tier_stats["output_file"]
+    else:
+        final_location = str(chatml_path)
+        if storage:
+            print("Stage 6: Uploading to storage...")
+            data = chatml_path.read_bytes()
+            final_location = storage.save(output_filename, data)
+            print(f"  -> Uploaded to: {final_location}")
+            # Remove local file after upload
+            chatml_path.unlink()
 
     # Clean up intermediate files
     for intermediate in [conversations_path, cleaned_path, scored_path, redaction_log_path]:
@@ -177,7 +236,13 @@ def run_pipeline(
     state["last_run"] = datetime.now().isoformat()
     save_state(state_path, state)
 
-    print(f"\nDone! Training data: {final_location}")
+    # Print final output location(s)
+    if tiered_export:
+        print(f"\nDone! Tiered training datasets created:")
+        for tier_name, location in final_location.items():
+            print(f"  - {tier_name}: {location}")
+    else:
+        print(f"\nDone! Training data: {final_location}")
 
     return {
         "status": "success",
@@ -201,21 +266,26 @@ if __name__ == "__main__":
 Examples:
   python pipeline.py                          # Full run, local output
   python pipeline.py --incremental            # Only new sessions
-  python pipeline.py --llm-judge              # Use Flow-Judge scoring
+  python pipeline.py --llm-judge              # Use LLM scoring (config/scoring.yaml)
   python pipeline.py --s3-bucket my-bucket    # Upload to S3
   python pipeline.py --prefix teammate1       # Custom output prefix
         """
     )
     parser.add_argument("--output", "-o", default="output", help="Output directory")
     parser.add_argument("--project", "-p", help="Filter to specific project")
-    parser.add_argument("--llm-judge", action="store_true", help="Use LLM-as-judge scoring")
-    parser.add_argument("--model", default="flow-judge:latest", help="Ollama model for LLM judge")
+    parser.add_argument("--llm-judge", action="store_true", help="Use LLM-as-judge scoring (configured in config/scoring.yaml)")
     parser.add_argument("--min-score", type=float, default=0.6, help="Minimum quality score (default: 0.6)")
     parser.add_argument("--incremental", "-i", action="store_true", help="Only process new sessions since last run")
     parser.add_argument("--s3-bucket", help="S3 bucket for output (enables S3 upload)")
     parser.add_argument("--s3-prefix", default="training-data", help="S3 key prefix (default: training-data)")
     parser.add_argument("--prefix", help="Output filename prefix (default: username-hostname)")
     parser.add_argument("--json", action="store_true", help="Output stats as JSON")
+
+    # Tiered export options
+    parser.add_argument("--no-tiered", action="store_true", help="Disable tiered quality datasets (create single file)")
+    parser.add_argument("--high-quality-threshold", type=float, default=0.8, help="Minimum score for high_quality tier (default: 0.8)")
+    parser.add_argument("--good-quality-threshold", type=float, default=0.7, help="Minimum score for good_quality tier (default: 0.7)")
+    parser.add_argument("--diverse-quality-threshold", type=float, default=0.6, help="Minimum score for diverse tier (default: 0.6)")
 
     args = parser.parse_args()
 
@@ -229,11 +299,14 @@ Examples:
         output_dir=args.output,
         project_filter=args.project,
         llm_judge=args.llm_judge,
-        llm_model=args.model,
         min_score=args.min_score,
         incremental=args.incremental,
         storage=storage,
         output_prefix=args.prefix,
+        tiered_export=not args.no_tiered,
+        high_quality_threshold=args.high_quality_threshold,
+        good_quality_threshold=args.good_quality_threshold,
+        diverse_quality_threshold=args.diverse_quality_threshold,
     )
 
     if args.json:

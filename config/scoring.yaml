@@ -1,0 +1,54 @@
+# LLM Quality Scoring Configuration
+#
+# Distiller uses LLMs to score conversation quality across multiple dimensions.
+# You can use OpenRouter (cloud) or Ollama (local) for scoring.
+
+# Provider options: "openrouter", "ollama", or "none"
+# - openrouter: Use OpenRouter API (requires OPENROUTER_API_KEY env var)
+# - ollama: Use local Ollama models (requires Ollama installed)
+# - none: Skip LLM scoring (use heuristics only)
+provider: "openrouter"
+
+# Model selection (depends on provider)
+# OpenRouter examples:
+#   - "anthropic/claude-3.5-sonnet" (recommended, high quality)
+#   - "anthropic/claude-3-haiku" (faster, cheaper)
+#   - "openai/gpt-4o"
+#   - "meta-llama/llama-3.1-70b-instruct"
+# Ollama examples:
+#   - "llama3"
+#   - "mistral"
+#   - "phi3"
+model: "x-ai/grok-code-fast-1"
+
+# OpenRouter configuration
+openrouter:
+  # Base URL for OpenRouter API
+  base_url: "https://openrouter.ai/api/v1"
+
+  # API key is read from OPENROUTER_API_KEY environment variable (loaded from .env file)
+  # Get your key at: https://openrouter.ai/keys
+
+  # Optional: Site URL for rankings (helps OpenRouter improve)
+  site_url: "https://github.com/roach88/distiller"
+
+  # Optional: App name for tracking
+  app_name: "distiller"
+
+# Ollama configuration (for local models)
+ollama:
+  # Base URL for Ollama API
+  base_url: "http://localhost:11434"
+
+  # Model will be pulled automatically if not present
+
+# Scoring parameters
+scoring:
+  # Temperature for LLM responses (0.0 = deterministic, 1.0 = creative)
+  temperature: 0.1
+
+  # Maximum tokens for scoring response
+  max_tokens: 500
+
+  # Timeout for scoring request (seconds)
+  timeout: 30
