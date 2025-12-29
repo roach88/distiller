@@ -52,7 +52,7 @@ You get:
 | **Heuristic** (fast, free) | Tool success rate, response depth, task completion signals |
 | **LLM Judge** (via OpenRouter) | Task completion, tool effectiveness, code quality (1-5 scales) |
 
-Scores are normalized to 0-1 and combined. Conversations below 0.6 are filtered out.
+Scores are normalized to 0-1 and combined. By default, conversations below 0.6 are filtered out but this is configurable.
 
 ## Quick Start
 
