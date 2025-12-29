@@ -17,10 +17,6 @@ This data just sits in `~/.claude/projects/`, unused. Meanwhile, fine-tuning req
 
 Distiller reads your Claude Code sessions, scores them for quality, and exports training-ready datasets:
 
-```
-~/.claude/projects/ → Distiller → training_data.jsonl
-```
-
 You get:
 
 - **Quality-tiered outputs** — High/good/diverse quality buckets
@@ -34,7 +30,7 @@ You get:
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
 │   Claude Code        Distiller Pipeline              Output     │
-│   ───────────        ─────────────────              ──────     │
+│   ───────────        ─────────────────              ──────      │
 │                                                                 │
 │   ~/.claude/    ──▶  Ingest  ──▶  Clean  ──▶  Score  ──▶  JSONL │
 │   projects/          (parse)      (PII)      (quality)   (tier) │
