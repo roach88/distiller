@@ -124,6 +124,23 @@ Your training data will be in `output/`.
 
    This creates the database, imports existing sessions, and sets up a weekly cron job.
 
+6. **Add to PATH** (for global access)
+
+   The `distiller` command is available when the venv is active. To use it from anywhere without activating:
+
+   ```bash
+   # Add to your shell config (~/.zshrc or ~/.bashrc)
+   export PATH="$PATH:/path/to/distiller/.venv/bin"
+   ```
+
+   Or create an alias:
+
+   ```bash
+   alias distiller="/path/to/distiller/.venv/bin/distiller"
+   ```
+
+   Replace `/path/to/distiller` with your actual install location.
+
 ## Usage
 
 ### Commands
